@@ -6,7 +6,7 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup as BS
 from time import sleep
-from datetime import datetime
+import datetime as dt
 # from tqdm import tqdm
 
 import webbrowser
@@ -14,6 +14,18 @@ import webbrowser
 # открываем WhatsApp в браузере
 driver = Edge()
 driver.get("https://web.whatsapp.com")
+
+def find_element_or_none(parent, by, value):
+    try:
+        return parent.find_element(by=by, value=value)
+    except NoSuchElementException:
+        return None
+
+def find_elements_or_none(parent, by, value):
+    try:
+        return parent.find_elements(by=by, value=value)
+    except NoSuchElementException:
+        return None
 
 try:
     # ожидаем, когда прогрузится страница с диалогами
@@ -25,6 +37,7 @@ try:
 
     # подгружаем диалоги
     dialogs = driver.find_elements(by=By.XPATH, value='//*[@id="pane-side"]/div/div/div/div')
+    # TODO: что делать если нет диалогов
 
     # print(len(dialogs))
 
@@ -36,53 +49,103 @@ try:
     # html = pane_side.get_attribute('innerHTML')
     names_phones = []
     dates_messages = []
+    result = []
     # for dlg in dialogs:
     # with open('index.html', 'a', encoding='utf-8') as f:
-    # f.write(dlg.get_attribute('innerHTML'))
+    # f.write(dlg.get_attribute('innerHTML')
     for dlg in dialogs:
         # заходим в диалог
         dlg.click()
         # ищем информацию о номере телефона
         # открываем информацию о профиле собеседника
-        profile = driver.find_element(by=By.XPATH, value='//*[@id="main"]/header/div[2]/div/div/span')
+        profile = find_element_or_none(parent=driver,
+                                       by=By.XPATH,
+                                       value='//*[@id="main"]/header/div[2]/div/div/span')
         profile.click()
         sleep(3)  # TODO: дожидаться прогрузки
-        name = driver.find_element(by=By.XPATH,
-                                   value='//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/h2/span').text
-        phone = driver.find_element(by=By.XPATH,
-                                    value='//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/div/span/span').text
+        name = find_element_or_none(parent=driver,
+                                    by=By.XPATH,
+                                    value='//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/h2/span').text
+        phone = find_element_or_none(parent=driver,
+                                     by=By.XPATH,
+                                     value='//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/div/span/span').text
         names_phones.append((name, phone))
         # скроллим диалог до начала
-        driver.find_element(by=By.XPATH,
-                            value='//*[@id="main"]/div[3]/div/div[2]').send_keys(Keys.CONTROL + Keys.HOME)
+        find_element_or_none(parent=driver,
+                             by=By.XPATH,
+                             value='//*[@id="main"]/div[3]/div/div[2]').send_keys(Keys.CONTROL + Keys.HOME)
         # собираем сообщения и их даты
-        flis = driver.find_elements(by=By.CLASS_NAME, value='focusable-list-item')
-        messages = []
-        for fli in flis:
-            # убираем из найденных элементов те, которые не являются
-            # входящими или исходящими сообщениями
-            classes = fli.get_attribute('class').split()
-            if 'message-out' in classes or 'message-in' in classes:
-                messages.append(fli)
-        result = []
-        for mes in messages:
-            try:
-                date_sender = mes.find_element(by=By.CLASS_NAME, value='copyable-text').get_attribute('data-pre-plain-text')
-                date = date_sender[1:18]
-                sender = date_sender[21:-2]
-                mes_text = mes.find_element(by=By.CLASS_NAME, value='selectable-text').find_element(by=By.TAG_NAME, value='span')
-                text = mes_text.text if mes_text else ''
-                result.append((date, sender, text))  # TODO: классы вместо кортежей
-            except:
-                result.append(('хз когда', 'хз кто', 'хз что'))
+        list_items = find_elements_or_none(parent=driver,
+                                           by=By.CLASS_NAME,
+                                           value='focusable-list-item')
+        # messages = []
+        # for md in messages_and_dates:
+        #     # убираем из найденных элементов те, которые не являются
+        #     # входящими или исходящими сообщениями
+        #     classes = md.get_attribute('class').split()
+        #     if 'message-out' in classes or 'message-in' in classes:
+        #         messages.append(md)
+        for i, item in enumerate(list_items):
+            # TODO: сегодня и вчера заменить на даты
+            datetime_sender_web_el = find_element_or_none(parent=item,
+                                                          by=By.CLASS_NAME,
+                                                          value='copyable-text')
+            if datetime_sender_web_el:
+                # для сообщений типа "текст", "контакт"
+                datetime_sender = datetime_sender_web_el.get_attribute('data-pre-plain-text')
+                date_time = datetime_sender[1:18]
+                sender = datetime_sender[20:-2]
+                text_web_el = find_element_or_none(parent=item,
+                                                   by=By.CLASS_NAME,
+                                                   value='selectable-text')
+                text_web_el = find_element_or_none(parent=text_web_el,
+                                                   by=By.TAG_NAME,
+                                                   value='span')
+                text = text_web_el.text if text_web_el else ''
+            else:
+                # для сообщений типа "фото", "видео", "документ"
+                # видео: .//div[3]/div/div[1]/div[1]/div/div[2]/div/span
+                # фото: .//div[2]/div/div[1]/div[1]/div/div[2]/div/span
+                # док: .//div[2]/div/div[1]/div[1]/div[2]/div/span
+                time_web_el = find_element_or_none(parent=item,
+                                                   by=By.XPATH,
+                                                   value='.//div/div[1]/div[1]/div/div[2]/div/span')
+                if time_web_el:
+                    time = time_web_el.text
+                    text = '[фото/видео]'  # TODO: различать фото и видео
+                else:
+                    time_web_el = find_element_or_none(parent=item,
+                                                       by=By.XPATH,
+                                                       value='.//div/div[1]/div[1]/div[2]/div/span')
+                    if time_web_el:
+                        time = time_web_el.text
+                        mes_type = '[документ]'  # TODO: название документа
+                    else:
+                        # плашка с датой
+                        continue
+                for item_reversed in list_items[i::-1]:
+                    # ищём дату сообщения
+                    date_web_el = find_element_or_none(parent=item_reversed,
+                                                       by=By.XPATH,
+                                                       value='.//div/span')
+                    if date_web_el:
+                        date = date_web_el.text
+                        if date == 'ВЧЕРА':
+                            date = dt.date.today() - dt.timedelta(days=1)
+                            date = date.strftime('%d.%m.%Y')
+                        elif date == 'СЕГОДНЯ':
+                            date = dt.date.today().strftime('%d.%m.%Y')
+                date_time = f'{time}, {date}'
+                sender = 'ну кто-то'  # TODO: кто
+                text = f'[{mes_type}]'
+            result.append((date_time, sender, text))  # TODO: классы вместо кортежей
         sleep(3)
     # webbrowser.open('index.html', new=2)
 finally:
     print('Имена и номера:', names_phones)
-    for date, sender, text in result:
+    for date_time, sender, text in result:
         print('='*30)
-        print('Дата:', date)
+        print('Дата:', date_time)
         print('От:', sender)
         print('Сообщение:', text)
     driver.quit()
-    pass
