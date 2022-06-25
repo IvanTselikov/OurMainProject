@@ -28,9 +28,41 @@ def find_elements_or_none(parent, by, value):
         return None
 
 try:
+    # ждём появления qr-кода
+    wait(driver, 30).until(
+        EC.presence_of_element_located((By.XPATH,
+                                        '//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div/canvas'))
+    )
+    token = find_element_or_none(parent=driver,
+                                 by=By.XPATH,
+                                 value='//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div').get_attribute('data-ref')
+    screenshot = driver.save_screenshot('my_screenshot.png')
+    while True:
+        # TODO: поставить таймаут
+        sleep(10)
+        button = find_element_or_none(parent=driver,
+                                      by=By.XPATH,
+                                      value='//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div/span/button')
+        if button:
+            # перегенерируем qr-код
+            sleep(1)
+            button.click()
+            sleep(1)
+        new_token_web_el = find_element_or_none(parent=driver,
+                                         by=By.XPATH,
+                                         value='//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div')
+        if not new_token_web_el:
+            # токен пропал - страница поменялась
+            break
+        new_token = new_token_web_el.get_attribute('data-ref')
+        if new_token != token:
+            token = new_token
+            screenshot = driver.save_screenshot('my_screenshot.png')
+            print('QR изменился')
     # ожидаем, когда прогрузится страница с диалогами
-    element = wait(driver, 600).until(
-        EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div/div/div'))
+    wait(driver, 600).until(
+        EC.presence_of_element_located((By.XPATH,
+                                        '//*[@id="pane-side"]/div/div/div'))
     )
     sleep(3)  # TODO: дожидаться пока диалоги прогрузятся полностью
     # pane_side = driver.find_element(by=By.XPATH, value='//*[@id="pane-side"]/div/div/div')
@@ -111,7 +143,7 @@ try:
                                                    by=By.XPATH,
                                                    value='.//div/div[1]/div[1]/div/div[2]/div/span')
                 if time_web_el:
-                    time = time_web_el.text
+                    time = time_web_el.text  # TODO: время последнего видео
                     text = '[фото/видео]'  # TODO: различать фото и видео
                 else:
                     time_web_el = find_element_or_none(parent=item,
@@ -119,7 +151,7 @@ try:
                                                        value='.//div/div[1]/div[1]/div[2]/div/span')
                     if time_web_el:
                         time = time_web_el.text
-                        mes_type = '[документ]'  # TODO: название документа
+                        text = '[документ]'  # TODO: название документа
                     else:
                         # плашка с датой
                         continue
@@ -135,9 +167,9 @@ try:
                             date = date.strftime('%d.%m.%Y')
                         elif date == 'СЕГОДНЯ':
                             date = dt.date.today().strftime('%d.%m.%Y')
+                        # TODO: дни недели
                 date_time = f'{time}, {date}'
                 sender = 'ну кто-то'  # TODO: кто
-                text = f'[{mes_type}]'
             result.append((date_time, sender, text))  # TODO: классы вместо кортежей
         sleep(3)
     # webbrowser.open('index.html', new=2)
