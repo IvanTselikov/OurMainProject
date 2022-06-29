@@ -12,6 +12,8 @@ import re
 import webbrowser
 from multiprocessing import Process, Condition
 
+from selenium.webdriver.edge.options import Options
+
 
 class DialogInfo:
     def __init__(self, name, numbers):
@@ -21,8 +23,13 @@ class DialogInfo:
 
 
 class WhatsAppParser:
-    def __init__(self):
-        self.__driver = Edge()
+    def __init__(self, hidden=True):
+        if hidden:
+            edge_options = Options()
+            edge_options.headless = True
+            self.__driver = Edge(options=edge_options)
+        else:
+            self.__driver = Edge()
         self.screenshot_taken = Condition()
 
 
@@ -151,9 +158,12 @@ class WhatsAppParser:
             )
         else:
             self.searchbar.click()
-            found_chats = wait(self.__driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div[1]/div/div'))
-            )
+            try:
+                found_chats = wait(self.__driver, 10).until(
+                    EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div[1]/div/div'))
+                )
+            except TimeoutException:
+                return []
 
         result = []
 
@@ -181,9 +191,14 @@ class WhatsAppParser:
                 current_dlg = self.__find_element_or_none(parent=self.__driver.switch_to.active_element,
                                                           value='..')
                 if current_dlg == last_dlg:
-                    # мы нажали на стрелочку вниз, но список диалогов не пролистался, - 
-                    # значит, мы дошли до его конца
-                    break
+                    self.__try_to_send_keys(self.__driver.switch_to.active_element, Keys.DOWN)
+                    sleep(3)
+                    current_dlg = self.__find_element_or_none(parent=self.__driver.switch_to.active_element,
+                                                              value='..')
+                    if current_dlg == last_dlg:
+                        # мы нажали на стрелочку вниз, но список диалогов не пролистался, - 
+                        # значит, мы дошли до его конца
+                        break
                 else:
                     last_dlg = current_dlg
                     dialog_idx += 1
@@ -276,6 +291,7 @@ class WhatsAppParser:
                 token = new_token
                 # делаем скриншот и уведомляем о его изменении
                 self.screenshot = self.__driver.get_screenshot_as_png()
+                self.__driver.save_screenshot('my_screenshot.png')
                 try:
                     self.screenshot_taken.notify()
                 except:
@@ -293,19 +309,22 @@ class WhatsAppParser:
                 EC.presence_of_element_located((By.XPATH, '//*[@id="main"]/header/div[2]'))
         )
         self.__try_to_click(profile)
+        sleep(2)
         # ждём прогрузки элемента с именем пользователя
         try:
-            name_web_el = wait(self.__driver, 3).until(
+            name = wait(self.__driver, 3).until(
                     EC.presence_of_element_located((By.XPATH,
                                                     '//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/h2/span'))
-            )
+            ).text
         except TimeoutException:
-            name_web_el = None
+            name = ''
         phones = []
-        if name_web_el:
+        if name:
             # парсим диалог
-            sleep(1)
-            name = name_web_el.text
+            # try:
+            #     name = name_web_el.text
+            # except:
+            #     name = ''
             phone = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/div/span/span').text
             phones.append(phone)
         else:
@@ -483,7 +502,7 @@ class WhatsAppParser:
         return (date_time, sender, text)
 
 
-with WhatsAppParser() as parser:
+with WhatsAppParser(hidden=False) as parser:
     # names_phones = parser.parse_dialog('Выпускники 1989')
     # messages = parser.parse_dialog('Выпускники 1989')  # TODO: диалог только с указанным названием
     # messages = parser.parse_dialog('Рпер')
@@ -501,7 +520,7 @@ with WhatsAppParser() as parser:
     # result = parser.parse_dialog('Мама')
     # result = parser.parse_dialog('+7 918 268-09-01')
     # result = parser.parse_dialog('Светлана Тощакова')
-    result = parser.parse_dialog('Рпер')
+    result = parser.parse_dialog(get_messages=False)
     for dlg_info in result:
         print('~'*80)
         print('Имя:', dlg_info.name)
