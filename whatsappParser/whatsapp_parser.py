@@ -13,6 +13,13 @@ import webbrowser
 from multiprocessing import Process, Condition
 
 
+class DialogInfo:
+    def __init__(self, name, numbers):
+        self.name = name
+        self.numbers = numbers
+        self.messages = []
+
+
 class WhatsAppParser:
     def __init__(self):
         self.__driver = Edge()
@@ -32,8 +39,26 @@ class WhatsAppParser:
         self.searchbar = wait(self.__driver, 60).until(
             EC.presence_of_element_located((By.XPATH, '//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]'))
         )
+
         sleep(5)  # даём прогрузиться диалогам
-        '//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]'
+
+        # достаём имя пользователя
+        # aboutme_web_el = self.__find_element_or_none('//*[@id="side"]/header/div[1]/div/div')
+        aboutme_web_el = self.__find_element_or_none('//*[@id="side"]/header/div[1]/div/img')
+        if not aboutme_web_el:
+            # пользователь без картинки профиля
+            aboutme_web_el = self.__find_element_or_none('//*[@id="side"]/header/div[1]/div/div/span')
+        self.__try_to_click(aboutme_web_el)
+
+        current_user_web_el = wait(self.__driver, 5).until(
+            EC.presence_of_element_located((By.XPATH, '//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/div/div[2]/div[2]/div[1]/div/div/div[2]'))
+        )
+        sleep(1)
+        self.__current_user = current_user_web_el.text
+
+        back_btn = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/header/div/div[1]/button')
+        self.__try_to_click(back_btn)
+        sleep(1)
 
         return self
 
@@ -132,12 +157,11 @@ class WhatsAppParser:
 
         result = []
 
-
         if found_chats:
             # диалоги с подходящими названиями найдены
             last_dlg = self.searchbar
-            zero = self.__find_element_or_none(parent=self.searchbar, value='..')
             dialog_idx = 0
+            full_match_only = False
             while True:
                 # листаем список найденных диалогов
                 # last_dlg.send_keys(Keys.DOWN)
@@ -145,8 +169,13 @@ class WhatsAppParser:
                 #     self.__try_to_send_keys(last_dlg, Keys.DOWN)
                 # except:
                 #     break
-                self.searchbar.click()
-                for i in range(dialog_idx + 2):
+                self.__try_to_send_keys(self.searchbar, Keys.DOWN)
+                i = 0
+                while self.searchbar == self.__driver.switch_to.active_element and i < 5:
+                    self.__try_to_send_keys(self.searchbar, Keys.DOWN)
+                    i += 1
+                # sleep(1)
+                for i in range(dialog_idx):
                     self.__try_to_send_keys(self.__driver.switch_to.active_element, Keys.DOWN)
                 sleep(1)
                 current_dlg = self.__find_element_or_none(parent=self.__driver.switch_to.active_element,
@@ -170,14 +199,22 @@ class WhatsAppParser:
                 if not last_mes_date:
                     # диалог ещё не был начат - мы дошли до списка контактов
                     break
+                dlg_name, phones = self.__get_name_and_numbers()
+                if dialog_idx == 1 and dlg_name == name:
+                    full_match_only = True
+                elif full_match_only and dlg_name != name:
+                    break
+                self.__current_dlg_name = dlg_name
+                dlg_info = DialogInfo(dlg_name, phones)
+
+                # result.append(name_phones)
                 if get_messages:
-                    messages = self.__get_messages()
-                    result.append(messages)
-                    current_dlg.click()
-                else:
-                    name_phones = self.__get_name_and_number()
-                    result.append(name_phones)
-                self.__try_to_click(found_chats)
+                    dlg_info.messages = self.__get_messages()
+                    # result.append(messages)
+                    # current_dlg.click()
+                result.append(dlg_info)
+
+                # self.__try_to_click(found_chats)
         return result
 
 
@@ -248,7 +285,7 @@ class WhatsAppParser:
             sleep(10)
 
 
-    def __get_name_and_number(self):
+    def __get_name_and_numbers(self):
         # ищем информацию о номере телефона
         # открываем информацию о профиле собеседника
         # profile = self.__find_element_or_none('//*[@id="main"]/header/div[2]')
@@ -257,14 +294,17 @@ class WhatsAppParser:
         )
         self.__try_to_click(profile)
         # ждём прогрузки элемента с именем пользователя
-        name_web_el = wait(self.__driver, 3).until(
-                EC.presence_of_element_located((By.XPATH,
-                                                '//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/h2/span'))
-        )
-        # TODO: бизнес-аккаунт
+        try:
+            name_web_el = wait(self.__driver, 3).until(
+                    EC.presence_of_element_located((By.XPATH,
+                                                    '//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/h2/span'))
+            )
+        except TimeoutException:
+            name_web_el = None
         phones = []
         if name_web_el:
             # парсим диалог
+            sleep(1)
             name = name_web_el.text
             phone = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[2]/div/span/span').text
             phones.append(phone)
@@ -276,11 +316,14 @@ class WhatsAppParser:
                 phones_raw = self.__find_element_or_none('//*[@id="main"]/header/div[2]/div[2]/span').text
                 phones = phones_raw.split(', ')
             else:
-                name_web_el = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[3]/div[1]/div[1]/span')
+                sleep(5)
+                # name_web_el = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[3]/div[1]/div[1]/span')
+                name_web_el = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[3]/span/div/span/div/div/section/div[1]/div[3]/div[1]/div[2]/span')
                 if name_web_el:
                     # парсим бизнес-аккаунт
                     name = name_web_el.text
-                    phone = self.__find_element_or_none(parent=name_web_el, value='..//..//div[2]/span').text
+                    # phone = self.__find_element_or_none(parent=name_web_el, value='..//..//div[2]/span').text
+                    phone = name
                     phones.append(phone)
                 else:
                     name = '[Чат неизвестного типа]'
@@ -347,7 +390,18 @@ class WhatsAppParser:
         if time_web_el:
             # фото или видео
             time = time_web_el.text  # TODO: время последнего видео
-            text = '[фото/видео]'
+            if time:
+                text = '[фото]'
+            else:
+                time_web_els = self.__find_elements_or_none(parent=item,
+                                                           by=By.TAG_NAME,
+                                                           value='span')
+                for el in time_web_els:
+                    if re.match(r'\d{2}:\d{2}', el.text):
+                        time = el.text
+                        break
+                text = '[видео]'
+            # text = '[фото/видео]'
         else:
             time_web_el = self.__find_element_or_none(parent=item,
                                                       value='.//div/div[1]/div[1]/div[2]/div/span')
@@ -413,23 +467,49 @@ class WhatsAppParser:
                 break
         date_time = f'{time}, {date}'
         sender = 'ну кто-то'  # TODO: кто
+        sender_web_el = self.__find_element_or_none(parent=item, value='.//div/div[1]/div[1]/div/div[1]/div/span[1]')
+        if sender_web_el and sender_web_el.text:
+            # в групповых чатах
+            sender = sender_web_el.text
+        else:
+            # в диалогах
+            classes = item.get_attribute('class').split()
+            if 'message-in' in classes:
+                # входящее сообщение
+                sender = self.__current_dlg_name
+            elif 'message-out' in classes:
+                # исходящее сообщение
+                sender = self.__current_user
         return (date_time, sender, text)
 
 
 with WhatsAppParser() as parser:
     # names_phones = parser.parse_dialog('Выпускники 1989')
     # messages = parser.parse_dialog('Выпускники 1989')  # TODO: диалог только с указанным названием
-    messages = parser.parse_dialog('Рпер')
-    # TODO: одинаковый выходной результат
-    for message in messages:
-        for date_time, sender, text in message:
-            print('='*50)
-            print('Дата:', date_time)
-            print('От:', sender)
-            print('Сообщение:', text)
-        print('~'*80)
+    # messages = parser.parse_dialog('Рпер')
+    # messages = parser.parse_dialog('+7 910 956-90-59')
+    # # messages = parser.parse_dialog('Светлана Тощакова')
+    # # TODO: одинаковый выходной результат
+    # for message in messages:
+    #     for date_time, sender, text in message:
+    #         print('='*50)
+    #         print('Дата:', date_time)
+    #         print('От:', sender)
+    #         print('Сообщение:', text)
+    #     print('~'*80)
     # result = parser.parse_dialog(get_messages=False)
-    # for name, phone in result:
-    #     print('='*50)
-    #     print('Имя:', name)
-    #     print('Телефон:', phone)
+    # result = parser.parse_dialog('Мама')
+    # result = parser.parse_dialog('+7 918 268-09-01')
+    # result = parser.parse_dialog('Светлана Тощакова')
+    result = parser.parse_dialog('Рпер')
+    for dlg_info in result:
+        print('~'*80)
+        print('Имя:', dlg_info.name)
+        print('Телефоны:', dlg_info.numbers)
+        if dlg_info.messages:
+            print('Сообщения:')
+            for date_time, sender, text in dlg_info.messages:
+                print('\tВремя:', date_time)
+                print('\tОт:', sender)
+                print('\tСообщение:', text)
+                print('='*50)
