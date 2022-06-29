@@ -32,6 +32,9 @@ class WhatsAppParser:
         self.searchbar = wait(self.__driver, 60).until(
             EC.presence_of_element_located((By.XPATH, '//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]'))
         )
+        sleep(5)  # даём прогрузиться диалогам
+        '//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]'
+
         return self
 
 
@@ -46,6 +49,7 @@ class WhatsAppParser:
         clicked = False
         last_exception = None
         i = 0
+        sleep(0.5)
         while not clicked and i < timeout:
             try:
                 web_el.click()
@@ -117,20 +121,34 @@ class WhatsAppParser:
             # self.searchbar.send_keys(name)
             self.__try_to_send_keys(self.searchbar, name)
             sleep(2)
+            found_chats = wait(self.__driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div/div/div'))
+            )
         else:
             self.searchbar.click()
+            found_chats = wait(self.__driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div[1]/div/div'))
+            )
 
         result = []
-        # ищем элемент "Ничего не найдено"
-        no_chats_span = self.__find_element_or_none('//*[@id="pane-side"]/div[1]/div/span')
 
-        if not no_chats_span:
+
+        if found_chats:
             # диалоги с подходящими названиями найдены
             last_dlg = self.searchbar
+            zero = self.__find_element_or_none(parent=self.searchbar, value='..')
+            dialog_idx = 0
             while True:
                 # листаем список найденных диалогов
                 # last_dlg.send_keys(Keys.DOWN)
-                self.__try_to_send_keys(last_dlg, Keys.DOWN)
+                # try:
+                #     self.__try_to_send_keys(last_dlg, Keys.DOWN)
+                # except:
+                #     break
+                self.searchbar.click()
+                for i in range(dialog_idx + 2):
+                    self.__try_to_send_keys(self.__driver.switch_to.active_element, Keys.DOWN)
+                sleep(1)
                 current_dlg = self.__find_element_or_none(parent=self.__driver.switch_to.active_element,
                                                           value='..')
                 if current_dlg == last_dlg:
@@ -139,25 +157,37 @@ class WhatsAppParser:
                     break
                 else:
                     last_dlg = current_dlg
+                    dialog_idx += 1
                 # ищем элемент с датой последнего сообщения
-                last_mes_date = self.__find_element_or_none(parent=current_dlg,
-                                                            value='.//div/div/div[2]/div[1]/div[2]')
+                # last_mes_date = self.__find_element_or_none(parent=current_dlg,
+                #                                             value='.//div/div/div[2]/div[1]/div[2]')
+                try:
+                    last_mes_date = wait(current_dlg, 5).until(
+                        EC.presence_of_element_located((By.XPATH, './/div/div/div[2]/div[1]/div[2]'))
+                    )
+                except TimeoutException:
+                    last_mes_date = None
                 if not last_mes_date:
                     # диалог ещё не был начат - мы дошли до списка контактов
                     break
                 if get_messages:
                     messages = self.__get_messages()
                     result.append(messages)
+                    current_dlg.click()
                 else:
                     name_phones = self.__get_name_and_number()
+                    result.append(name_phones)
+                self.__try_to_click(found_chats)
         return result
 
 
     DAYS_OF_WEEK = ['ПОНЕДЕЛЬНИК', 'ВТОРНИК', 'СРЕДА', 'ЧЕТВЕРГ', 'ПЯТНИЦА', 'СУББОТА', 'ВОСКРЕСЕНЬЕ']
     def __get_date_by_weekday(self, weekday):
         current_day = dt.datetime.today().isoweekday()
-        delta = abs(current_day - (self.DAYS_OF_WEEK.index(weekday) + 1))
-        return (dt.date.today() - dt.timedelta(days=delta)).date.strftime('%d.%m.%Y')
+        delta = current_day - (self.DAYS_OF_WEEK.index(weekday)+1)
+        if delta < 0:
+            delta += 7
+        return (dt.date.today() - dt.timedelta(days=delta)).strftime('%d.%m.%Y')
 
 
     def __find_element_or_none(self, value, parent=None, by=None):
@@ -221,7 +251,10 @@ class WhatsAppParser:
     def __get_name_and_number(self):
         # ищем информацию о номере телефона
         # открываем информацию о профиле собеседника
-        profile = self.__find_element_or_none('//*[@id="main"]/header/div[2]/div/div/span')
+        # profile = self.__find_element_or_none('//*[@id="main"]/header/div[2]')
+        profile = wait(self.__driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, '//*[@id="main"]/header/div[2]'))
+        )
         self.__try_to_click(profile)
         # ждём прогрузки элемента с именем пользователя
         name_web_el = wait(self.__driver, 3).until(
@@ -259,7 +292,8 @@ class WhatsAppParser:
         # скроллим диалог до начала
         messages_list = wait(self.__driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, '//*[@id="main"]/div[3]/div/div[2]')))
-        i, limit = 0, 5  # счётчики для отслеживания конца скролла
+        # TODO: не хватает
+        i, limit = 0, 10  # счётчики для отслеживания конца скролла
         while True:
             scroll_top = self.__driver.execute_script('return arguments[0].scrollTop', messages_list)
             if scroll_top == 0:
@@ -268,7 +302,7 @@ class WhatsAppParser:
                 i = 0
             if i == limit:
                 # дошли до начала диалога
-                # TODO: оптимизировать для коротких диалогов
+                # TODO: оптимизировать, особенно для коротких диалогов
                 break
             # messages_list.send_keys(Keys.CONTROL + Keys.HOME)
             self.__try_to_send_keys(messages_list, Keys.CONTROL + Keys.HOME)
@@ -281,12 +315,15 @@ class WhatsAppParser:
             datetime_sender_web_el = self.__find_element_or_none(parent=item,
                                                                  by=By.CLASS_NAME,
                                                                  value='copyable-text')
-            if datetime_sender_web_el:
-                # для сообщений типа "текст", "контакт"
-                mes_info = self.__extract_info_from_text_message(datetime_sender_web_el)
-            else:
-                # для сообщений типа "фото", "видео", "документ" и др.
-                mes_info = self.__extract_info_from_media_message(i, list_items)
+            try:
+                if datetime_sender_web_el:
+                    # для сообщений типа "текст", "контакт"
+                    mes_info = self.__extract_info_from_text_message(datetime_sender_web_el)
+                else:
+                    # для сообщений типа "фото", "видео", "документ" и др.
+                    mes_info = self.__extract_info_from_media_message(i, list_items)
+            except:
+                continue
             if mes_info:
                 messages.append(mes_info)
         return messages
@@ -298,7 +335,7 @@ class WhatsAppParser:
         sender = datetime_sender[20:-2]
         text_web_el = self.__find_element_or_none(parent=datetime_sender_web_el, by=By.CLASS_NAME, value='selectable-text')
         text_web_el = self.__find_element_or_none(parent=text_web_el, by=By.TAG_NAME, value='span')
-        text = text_web_el.text if text_web_el else ''
+        text = text_web_el.text if text_web_el else '[контакт]'
         return (date_time, sender, text)
 
 
@@ -308,23 +345,41 @@ class WhatsAppParser:
         time_web_el = self.__find_element_or_none(parent=item,
                                                   value='.//div/div[1]/div[1]/div/div[2]/div/span')
         if time_web_el:
+            # фото или видео
             time = time_web_el.text  # TODO: время последнего видео
-            text = '[фото/видео]'  # TODO: различать фото и видео
+            text = '[фото/видео]'
         else:
             time_web_el = self.__find_element_or_none(parent=item,
                                                       value='.//div/div[1]/div[1]/div[2]/div/span')
             if time_web_el:
+                # документ
                 time = time_web_el.text
-                text = '[документ]'  # TODO: название документа
+                text = '[документ]'
             else:
-                # плашка с датой
-                return None
+                forwarded_mark = self.__find_element_or_none(parent=item,
+                                                            value='.//div/div[1]/div[1]/div[1]/span[2]')
+                if forwarded_mark:
+                    # пересланное сообщение
+                    time = self.__find_element_or_none(parent=item,
+                                                       value='.//div/div[1]/div[1]/div[3]/div/span'
+                    ).text
+                    text = '[пересланное сообщение]'
+                else:
+                    time_web_el = self.__find_element_or_none(parent=item,
+                                                       value='.//div/div[1]/div[1]/div/div[4]/div/span')
+                    if time_web_el:
+                        # пересланное фото
+                        time = time_web_el.text
+                        text = '[фото]'
+                    else:
+                        # неинформативный вспомогательный элемент, например плашка с датой
+                        return None
         for item_reversed in list_items[i::-1]:
             # ищём дату сообщения
             date_web_el = self.__find_element_or_none(parent=item_reversed,
                                                       value='.//div/span')
             if date_web_el:
-                date = date_web_el.text
+                date = date_web_el.text.upper()
                 if date == 'ВЧЕРА':
                     date = dt.date.today() - dt.timedelta(days=1)
                     date = date.strftime('%d.%m.%Y')
@@ -332,16 +387,30 @@ class WhatsAppParser:
                     date = dt.date.today().strftime('%d.%m.%Y')
                 elif date in self.DAYS_OF_WEEK:
                     date = self.__get_date_by_weekday(date)
-                if not re.match(r'[\d]{2}.[\d]{2}.[\d]{4}', date):
-                    # в дате лежит что-то не то
-                    temp = self.__find_element_or_none('//*[@id="main"]/div[3]/div/div[2]/div[2]')
+                elif not re.match(r'([\d]{2}.[\d]{2}.[\d]{4})', date):
+                    continue
+            if not re.match(r'\d{2}.\d{2}.\d{4}', date):
+                # в дате лежит что-то не то
+                temp = self.__find_element_or_none('//*[@id="main"]/div[3]/div/div[2]')
+                while True:
                     self.__try_to_send_keys(temp, Keys.DOWN)
-                    date = self.__find_element_or_none(
-                        '//*[@id="main"]/div[3]/div/span/div/div/div/span'
-                    ).text
-                    date = self.__get_date_by_weekday(date)
-                # TODO: проверить, что в длинном диалоге не теряются сообщения
-                # TODO: исправить "Сообщения защищены сквозным шифрованием. Третьи лица, включая WhatsApp, не могут прочитать или прослушать их. Нажмите, чтобы узнать подробнее."
+                    sleep(1)
+                    # date = wait(self.__driver, 10).until(
+                    #         EC.presence_of_element_located((By.XPATH, '//*[@id="main"]/div[3]/div/span/div/div/div/span'))
+                    # ).text
+                    date_web_el = self.__find_element_or_none('//*[@id="main"]/div[3]/div/span/div/div/div/span')
+                    if date_web_el:
+                        date = date_web_el.text
+                        if date == 'ВЧЕРА':
+                            date = dt.date.today() - dt.timedelta(days=1)
+                            date = date.strftime('%d.%m.%Y')
+                        elif date == 'СЕГОДНЯ':
+                            date = dt.date.today().strftime('%d.%m.%Y')
+                        elif date in self.DAYS_OF_WEEK:
+                            date = self.__get_date_by_weekday(date)
+                        break
+            else:
+                break
         date_time = f'{time}, {date}'
         sender = 'ну кто-то'  # TODO: кто
         return (date_time, sender, text)
@@ -349,9 +418,18 @@ class WhatsAppParser:
 
 with WhatsAppParser() as parser:
     # names_phones = parser.parse_dialog('Выпускники 1989')
-    names_phones = parser.parse_dialog('+7 918 ')
-    for name, phone in names_phones:
-        print('='*25 + i + '='*25)
-        print('Имя:', name)
-        print('Телефон:', phone)
-        print('='*50)
+    # messages = parser.parse_dialog('Выпускники 1989')  # TODO: диалог только с указанным названием
+    messages = parser.parse_dialog('Рпер')
+    # TODO: одинаковый выходной результат
+    for message in messages:
+        for date_time, sender, text in message:
+            print('='*50)
+            print('Дата:', date_time)
+            print('От:', sender)
+            print('Сообщение:', text)
+        print('~'*80)
+    # result = parser.parse_dialog(get_messages=False)
+    # for name, phone in result:
+    #     print('='*50)
+    #     print('Имя:', name)
+    #     print('Телефон:', phone)
