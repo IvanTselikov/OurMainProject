@@ -1,107 +1,161 @@
-import telebot  # pip install pyTelegramBotAPI
+import telebot
 from telebot import types
 from config import TOKEN
-from main import WhatsAppParser
+from whatsapp_parser import *
 from selenium.webdriver import Edge
+from Youtube_parser import main
+import threading
+
+
+class User:
+    def __init__(self, id, chat_id, last_message=None, parser=None):
+        self.id = id
+        self.chat_id = chat_id
+        self.last_message = last_message
+        self.parser = parser
+        self.current_operation = None
+        self.operation_cancelled = False
 
 
 class Bot:
+    # идентификаторы кнопок
+    START = 'start'
+    WHATSAPP = 'WhatsApp'
+    YOUTUBE = 'YouTube'
+    CONTACTS_ONE = 'GetContactsFromOne'
+    CONTACTS_ALL = 'GetContactsFromAll'
+    MESSAGES_ONE = 'GetMessagesFromOne'
+    MESSAGES_ALL = 'GetMessagesFromAll'
+    BACK = 'Back'
+
+
     def __init__(self, token):
-        """Создаёт Telegram-бота с указанным токеном и сценарием.
+        self.__tgbot = telebot.TeleBot(token)
+        self.__user_table = []
+        print('Бот запущен')
 
-        Параметры:
-        token - токен бота
-        """
-        self.token = token
-        self.tgbot = telebot.TeleBot(token)
-        self.mode_switch = 'None'
-
-        @self.tgbot.message_handler(commands=['start'])
+        @self.__tgbot.message_handler(commands=['start'])
         def start(message):
-            # Создаем две начальный выбор
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton('WhatAppParser',
-                                                  callback_data='WhatApp'))
-            markup.add(types.InlineKeyboardButton('YoutubeParser',
-                                                  callback_data='Youtube'))
-            self.tgbot.send_message(message.chat.id, text="Заглушка",
-                                    reply_markup=markup)
+            # заносим пользователя в список, если он ещё не был в него внесён
+            if not self.__find_user(message.from_user.id):
+                new_user = User(message.from_user.id, message.chat.id, self.START)
+                self.__user_table.append(new_user)
+                print(f'Пользователь {new_user.id} начал использовать парсер.')
+                # предлагаем выбрать парсер
+                self.__send_parser_choosing_menu(new_user.chat_id)
 
-        @self.tgbot.callback_query_handler(func=lambda call: True)
-        def choose_parser(call):
-            self.tgbot.answer_callback_query(call.id)
-            next_menu = types.InlineKeyboardMarkup()
-            # Создаем
-            if call.data == 'WhatApp':
-                next_menu.add(types.InlineKeyboardButton('Получение Имени и Телефона пользователя',
-                                                         callback_data='GetContact'))
-                next_menu.add(types.InlineKeyboardButton('Получения всех телефонов пользователей из групповых чатов',
-                                                         callback_data='GetGroup'))
-                next_menu.add(types.InlineKeyboardButton('Получение всех сообщений от одного пользователя',
-                                                         callback_data='GetMessageFromContact'))
-                next_menu.add(types.InlineKeyboardButton('Получение всех сообщений из группового Чата',
-                                                         callback_data='GetMessageFromGroup'))
-                next_menu.add(types.InlineKeyboardButton('Назад',
-                                                         callback_data='Back'))
-                self.tgbot.send_message(call.message.chat.id,
-                                        text="Заглушка",
-                                        reply_markup=next_menu)
-            elif call.data == 'Back':
-                markup = types.InlineKeyboardMarkup()
-                markup.add(types.InlineKeyboardButton('WhatAppParser',
-                                                      callback_data='WhatApp'))
-                markup.add(types.InlineKeyboardButton('YoutubeParser',
-                                                      callback_data='Youtube'))
-                self.tgbot.send_message(call.message.chat.id,
-                                        text="Заглушка",
+
+        @self.__tgbot.callback_query_handler(func=lambda call: True)
+        def buttons_handler(call):
+            self.__tgbot.answer_callback_query(call.id)
+            user = self.__find_user(call.from_user.id)
+            if user:
+                next_menu = types.InlineKeyboardMarkup()
+                if call.data == self.WHATSAPP and user.last_message == self.START:
+                    # запускаем WhatsApp-парсер
+                    next_menu.add(types.InlineKeyboardButton('Отмена',
+                                                             callback_data=self.BACK))
+                    self.__tgbot.send_message(user.chat_id,
+                                              text='Ожидайте, требуется авторизация в WhatsApp...',
+                                              reply_markup=next_menu)
+                    if not (user.current_operation and user.current_operation.is_alive()):
+                        user.current_operation = threading.Thread(target=self.__start_whatsapp_parsing, args=(user, ))
+                        user.current_operation.start()
+                    user.last_message = self.WHATSAPP
+                elif call.data == self.BACK:
+                    if user.last_message == self.WHATSAPP:
+                        # отменяем авторизацию
+                        self.__operation_cancelled = True
+                        self.__tgbot.send_message(user.chat_id, 'Отмена операции...')
+                        user.last_message = self.START
+                        # присылаем меню с выбором парсеров
+                        self.__send_parser_choosing_menu(user.chat_id)
+                elif call.data == self.YOUTUBE:
+                    self.__tgbot.send_message(call.message.chat.id, 'Введите название видео')
+                elif call.data == self.CONTACTS_ONE:
+                    self.__tgbot.send_message(call.message.chat.id, "Введите название чата")
+                elif call.data == self.CONTACTS_ALL:
+                    get_all_name_and_number(call)
+                elif call.data == self.MESSAGES_ONE:
+                    pass
+                elif call.data == self.MESSAGES_ALL:
+                    get_all_messages(call)
+
+        self.__tgbot.polling(none_stop=True)
+
+
+    def __send_parser_choosing_menu(self, chat_id):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton('Парсинг WhatsApp',
+                                              callback_data=self.WHATSAPP))
+        markup.add(types.InlineKeyboardButton('Парсинг YouTube',
+                                              callback_data=self.YOUTUBE))
+        self.__tgbot.send_message(chat_id,
+                                  text='Выберите действие:',
+                                  reply_markup=markup)
+
+
+    def __send_whatsapp_options_menu(self, chat_id):
+        markup = types.InlineKeyboardMarkup()
+
+        markup.add(types.InlineKeyboardButton('Получить список телефонов из чата',
+                                                    callback_data=self.CONTACTS_ONE))
+        markup.add(types.InlineKeyboardButton('Получить список телефонов из всех чатов',
+                                                    callback_data=self.CONTACTS_ALL))
+        markup.add(types.InlineKeyboardButton('Получить сообщения из чата',
+                                                    callback_data=self.MESSAGES_ONE))
+        markup.add(types.InlineKeyboardButton('Получить сообщения из всех чатов',
+                                                    callback_data=self.MESSAGES_ALL))
+        markup.add(types.InlineKeyboardButton('Назад',
+                                                    callback_data=self.BACK))
+        self.__tgbot.send_message(chat_id,
+                                  text='Что вы хотите сделать?',
+                                  reply_markup=markup)
+
+
+    def __start_whatsapp_parsing(self, user):
+        user.parser = WhatsAppParser(hidden=False)
+        threading.Thread(target=self.__authorize_user, args=(user, )).start()
+        user.parser.open()
+
+
+    def __authorize_user(self, user):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton('Назад',
+                                              callback_data=self.BACK))
+        try_num, limit = 0, 10
+        while True:
+            # ждём появления или изменения скриншота с qr-кодом
+            is_set = user.parser.screenshot_changed.wait(180)
+            if not is_set:
+                # время ожидания истекло
+                break
+            user.parser.screenshot_changed.clear()
+            if user.operation_cancelled:
+                # пользователь прервал операцию
+                user.parser.close()
+                break
+            if user.parser.screenshot:
+                # qr-код изменился
+                self.__tgbot.send_photo(user.chat_id,
+                                        photo=user.parser.screenshot,
+                                        caption='Пожалуйста, проследуйте инструкции на скриншоте.\n' +
+                                        'Боту необходим временный доступ к вашим чатам.\n' +
+                                        'QR-код актуален не более одной минуты. При его изменении вам будет ' +
+                                        'отправлена его обновлённая версия.',
                                         reply_markup=markup)
-            elif call.data == 'Youtube':
-                next_menu.add(types.InlineKeyboardButton('Вернутся в начало',
-                                                         callback_data='Back'))
-                self.tgbot.send_message(call.message.chat.id,
-                                        text="Пожалуйста введите название видеоролика который вы хотите найти",
-                                        reply_markup=next_menu)
-            elif call.data == 'GetContact' or call.data == 'GetMessageFromContact':
-                next_menu.add(types.InlineKeyboardButton('Вернутся в начало',
-                                                         callback_data='Back'))
-                self.tgbot.send_message(call.message.chat.id,
-                                        text="Пожалуйста введите название контакта который вы хотите найти",
-                                        reply_markup=next_menu)
-            elif call.data == 'GetGroup' or call.data == 'GetMessageFromGroup':
-                next_menu.add(types.InlineKeyboardButton('Вернутся в начало',
-                                                         callback_data='Back'))
-                self.tgbot.send_message(call.message.chat.id,
-                                        text="Пожалуйста введите название группового чата который вы хотите найти",
-                                        reply_markup=next_menu)
-            self.mode_switch = call.data
-            # TODO Сделать создание кнопок выбора операции для ютуба
-            # TODO Реализовать методы для кнопок WhatApp_Parser и YouTube_Parser
-
-        @self.tgbot.message_handler(content_types=['text'])
-        def multifunctional_method(message):
-            if self.mode_switch == 'GetContact':
-                driver = Edge()
-                get_name_and_number(driver, message)
-            elif self.mode_switch == 'GetGroup':
-                driver = Edge()
-                get_name_and_number(driver, message)
-            # elif self.mode_switch == 'GetMessageFromContact':
-            #
-            # elif self.mode_switch=='GetMessageFromGroup':
-            # elif self.mode_switch == 'Youtube':
+                try_num += 1
+                if try_num >= limit:
+                    # если пользователь забросил бота, нужно перестать выполнять эту операцию
+                    break
             else:
-                self.tgbot.send_message(message.chat.id,
-                                        text="Но вы же еще не выбрали что вы будете делать!")
+                # авторизация завершена
+                self.__send_whatsapp_options_menu(user.chat_id)
+                break
 
-        def get_name_and_number(driver, message):
-            with WhatsAppParser(driver) as parser:
-                names_phones = parser.parse_dialog(message.text)
-                for name, phone in names_phones:
-                    print('Имя:', name)
-                    print('Телефон:', phone)
-                    print('=' * 50)
 
-        self.tgbot.polling(none_stop=True)
+    def __find_user(self, user_id):
+        return next((user for user in self.__user_table if user_id == user.id), None)
 
 
 Bot(TOKEN)

@@ -10,7 +10,7 @@ import datetime as dt
 # from tqdm import tqdm
 import re
 import webbrowser
-from multiprocessing import Process, Condition
+import threading
 
 from selenium.webdriver.edge.options import Options
 
@@ -30,10 +30,18 @@ class WhatsAppParser:
             self.__driver = Edge(options=edge_options)
         else:
             self.__driver = Edge()
-        self.screenshot_taken = Condition()
+        self.screenshot_changed = threading.Event()
 
 
     def __enter__(self):
+        return self.open()
+
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+    def open(self):
         # открываем WhatsApp в браузере
         self.__driver.get('https://web.whatsapp.com')  # TODO: сделать браузер невидимым
 
@@ -43,7 +51,7 @@ class WhatsAppParser:
         # ожидаем, когда прогрузится страница с диалогами, и находим строку поиска
         # wait(self.__driver, 60).until(EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div')))
         # self.searchbar = self.__find_element_or_none('//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]')
-        self.searchbar = wait(self.__driver, 60).until(
+        self.__searchbar = wait(self.__driver, 60).until(
             EC.presence_of_element_located((By.XPATH, '//*[@id="side"]/div[1]/div/div/div[2]/div/div[2]'))
         )
 
@@ -58,20 +66,22 @@ class WhatsAppParser:
         self.__try_to_click(aboutme_web_el)
 
         current_user_web_el = wait(self.__driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, '//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/div/div[2]/div[2]/div[1]/div/div/div[2]'))
+            EC.presence_of_element_located((By.XPATH,
+                                            '//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/div/div[2]/div[2]/div[1]/div/div/div[2]'))
         )
         sleep(1)
         self.__current_user = current_user_web_el.text
 
-        back_btn = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/header/div/div[1]/button')
+        back_btn = self.__find_element_or_none(
+            '//*[@id="app"]/div/div/div[2]/div[1]/span/div/span/div/header/div/div[1]/button')
         self.__try_to_click(back_btn)
         sleep(1)
 
         return self
 
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        # выходим из аккаунта
+    def close(self):
+        # выходим из аккаунта, если требуется
         self.__log_out()
         # закрываем браузер
         self.__driver.quit()
@@ -113,6 +123,10 @@ class WhatsAppParser:
     def __log_out(self):
         # ищем и открываем меню
         menu_web_el = self.__find_element_or_none('//*[@id="side"]/header/div[2]/div/span/div[3]/div/span')
+        if not menu_web_el:
+            # пользователь ещё не авторизован
+            return
+
         self.__try_to_click(menu_web_el)
 
         # ждём и кликаем по кнопке "Выход"
@@ -151,13 +165,13 @@ class WhatsAppParser:
         # ищем диалог с указанным именем
         if name:
             # self.searchbar.send_keys(name)
-            self.__try_to_send_keys(self.searchbar, name)
+            self.__try_to_send_keys(self.__searchbar, name)
             sleep(2)
             found_chats = wait(self.__driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div/div/div'))
             )
         else:
-            self.searchbar.click()
+            self.__searchbar.click()
             try:
                 found_chats = wait(self.__driver, 10).until(
                     EC.presence_of_element_located((By.XPATH, '//*[@id="pane-side"]/div[1]/div/div'))
@@ -169,7 +183,7 @@ class WhatsAppParser:
 
         if found_chats:
             # диалоги с подходящими названиями найдены
-            last_dlg = self.searchbar
+            last_dlg = self.__searchbar
             dialog_idx = 0
             full_match_only = False
             while True:
@@ -179,10 +193,10 @@ class WhatsAppParser:
                 #     self.__try_to_send_keys(last_dlg, Keys.DOWN)
                 # except:
                 #     break
-                self.__try_to_send_keys(self.searchbar, Keys.DOWN)
+                self.__try_to_send_keys(self.__searchbar, Keys.DOWN)
                 i = 0
-                while self.searchbar == self.__driver.switch_to.active_element and i < 5:
-                    self.__try_to_send_keys(self.searchbar, Keys.DOWN)
+                while self.__searchbar == self.__driver.switch_to.active_element and i < 5:
+                    self.__try_to_send_keys(self.__searchbar, Keys.DOWN)
                     i += 1
                 # sleep(1)
                 for i in range(dialog_idx):
@@ -230,6 +244,9 @@ class WhatsAppParser:
                 result.append(dlg_info)
 
                 # self.__try_to_click(found_chats)
+        # стираем текст из поля ввода
+        self.__searchbar.sendKeys(Keys.CONTROL + "a")
+        self.__searchbar.sendKeys(Keys.DELETE)
         return result
 
 
@@ -292,13 +309,12 @@ class WhatsAppParser:
                 # делаем скриншот и уведомляем о его изменении
                 self.screenshot = self.__driver.get_screenshot_as_png()
                 self.__driver.save_screenshot('my_screenshot.png')
-                try:
-                    self.screenshot_taken.notify()
-                except:
-                    # некого уведомлять
-                    pass
+                self.screenshot_changed.set()
                 print('QR изменился')
             sleep(10)
+        # процесс авторизации завершён, qr-код больше не нужен
+        self.screenshot = None
+        self.screenshot_changed.set()
 
 
     def __get_name_and_numbers(self):
@@ -502,33 +518,17 @@ class WhatsAppParser:
         return (date_time, sender, text)
 
 
-with WhatsAppParser(hidden=False) as parser:
-    # names_phones = parser.parse_dialog('Выпускники 1989')
-    # messages = parser.parse_dialog('Выпускники 1989')  # TODO: диалог только с указанным названием
-    # messages = parser.parse_dialog('Рпер')
-    # messages = parser.parse_dialog('+7 910 956-90-59')
-    # # messages = parser.parse_dialog('Светлана Тощакова')
-    # # TODO: одинаковый выходной результат
-    # for message in messages:
-    #     for date_time, sender, text in message:
-    #         print('='*50)
-    #         print('Дата:', date_time)
-    #         print('От:', sender)
-    #         print('Сообщение:', text)
-    #     print('~'*80)
-    # result = parser.parse_dialog(get_messages=False)
-    # result = parser.parse_dialog('Мама')
-    # result = parser.parse_dialog('+7 918 268-09-01')
-    # result = parser.parse_dialog('Светлана Тощакова')
-    result = parser.parse_dialog(get_messages=False)
-    for dlg_info in result:
-        print('~'*80)
-        print('Имя:', dlg_info.name)
-        print('Телефоны:', dlg_info.numbers)
-        if dlg_info.messages:
-            print('Сообщения:')
-            for date_time, sender, text in dlg_info.messages:
-                print('\tВремя:', date_time)
-                print('\tОт:', sender)
-                print('\tСообщение:', text)
-                print('='*50)
+if __name__ == '__main__':
+    with WhatsAppParser(hidden=False) as parser:
+        result = parser.parse_dialog(get_messages=False)
+        for dlg_info in result:
+            print('~'*80)
+            print('Имя:', dlg_info.name)
+            print('Телефоны:', dlg_info.numbers)
+            if dlg_info.messages:
+                print('Сообщения:')
+                for date_time, sender, text in dlg_info.messages:
+                    print('\tВремя:', date_time)
+                    print('\tОт:', sender)
+                    print('\tСообщение:', text)
+                    print('='*50)
