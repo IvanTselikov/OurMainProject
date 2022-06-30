@@ -287,7 +287,6 @@ class WhatsAppParser:
             EC.presence_of_element_located((By.XPATH,
                                             '//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div/canvas'))
         )
-        # screenshot = self.driver.save_screenshot('my_screenshot.png')
         token = None
         while True:
             button = self.__find_element_or_none('//*[@id="app"]/div/div/div[2]/div[1]/div/div[2]/div/span/button')
@@ -308,7 +307,7 @@ class WhatsAppParser:
                 token = new_token
                 # делаем скриншот и уведомляем о его изменении
                 self.screenshot = self.__driver.get_screenshot_as_png()
-                self.__driver.save_screenshot('my_screenshot.png')
+                # self.__driver.save_screenshot('my_screenshot.png')
                 self.screenshot_changed.set()
                 print('QR изменился')
             sleep(10)
