@@ -1,2 +1,3 @@
-# OurMainProject
-Proffecional WhatsApp parser
+# Простой парсер WhatsApp
+
+Парсер веб-версии WhatsApp: собирает текстовые сообщения в указанных диалогах в файл .csv, взаимодействует с пользователем с помощью Telegram-бота.
